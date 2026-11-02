@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <signal.h>
 using namespace std;
 class ctcpserver{
     private:
@@ -94,36 +95,77 @@ unsigned short m_port;
         closeclient();
     }
 };
+ctcpserver tcpserver;
+//父进程信号处理。
+void fathexit(int sig){
+  //防止信号中断
+  signal(SIGINT,SIG_IGN);
+  signal(SIGTERM,SIG_IGN);
+  cout<<"父进程退出,sig"<<sig<<endl;
+  kill(0,SIGTERM);//向子程序发送15，通知退出
+  tcpserver.closelisten();//父进程关闭监听
+exit(0);
+}
+//子进程信号处理
+void chidexit(int sig){
+  signal(SIGINT,SIG_IGN);
+  signal(SIGTERM,SIG_IGN);
+  cout<<"子进程"<<getpid()<<"退出，sig="<<sig<<endl;
+  tcpserver.closeclient();//子进程关闭监听
+exit(0);
+}
 int main(int argc,char*argv[]){
- if(argc!=2){
-     cout << "Using:./server 通讯端口\nExample:./server 5005\n\n";   // 端口大于1024，不与其它的重复。
+   if(argc!=2){
+    cout << "Using:./server 通讯端口\nExample:./server 5005\n\n";
     cout << "注意：运行服务端程序的Linux系统的防火墙必须要开通5005端口。\n";
     cout << "      如果是云服务器，还要开通云平台的访问策略。\n\n";
     return -1;
- }
- ctcpserver tcpserver;
- if(tcpserver.initserver(atoi(argv[1]))==false){
-    perror("initserver");
+   }
+   //忽略全部信号，可以解决僵尸进程
+   for(int ii=1;ii<=54;ii++){
+    signal(ii,SIG_IGN);
+   }
+   signal(SIGTERM,fathexit);
+   signal(SIGINT,fathexit);
+   if(tcpserver.initserver(atoi(argv[1]))==false){
+    perror("initserver()");
     return -1;
- }
- if(tcpserver.accept()==false){
-    perror("accept()");
-    return -1;
- }
- cout<<"客户端已经连接("<<tcpserver.clientip()<<").\n";
- string buffer;
- while(true){
-    if(tcpserver.recv(buffer,1024)==false){
+   }
+   while(true){
+    //受理客户端连接
+    if(tcpserver.accept()==false){
+      perror("accept()");
+      return -1;
+    }
+    int pid=fork();
+    if(pid==-1){
+      perror("fork");
+      return -1;
+    }
+    if(pid>0)//父进程
+    {
+      tcpserver.closeclient();
+      continue;
+    }
+    tcpserver.closelisten();
+    //重新设计信号
+    signal(SIGTERM,chidexit);
+    signal(SIGINT,SIG_IGN);//子进程不需要
+    cout<<"客户端已连接:"<<tcpserver.clientip()<<endl;
+    string buffer;
+    while(true){
+      if(tcpserver.recv(buffer,1024)==false){
         perror("recv()");
         break;
+      }
+      cout<<"接收"<<buffer<<endl;
+      buffer="ok";
+        if(tcpserver.send(buffer)==false){
+          perror("send");
+          break;
+        }
+        cout<<"发送"<<buffer<<endl;
     }
-    cout<<"接收"<<buffer<<endl;
-    buffer="ok";
-    if(tcpserver.send(buffer)==false){
-        perror("send()");
-        break;
-    }
-    cout<<"发送"<<buffer<<endl;
- }
- cout<<"完成服务"<<endl;
+    return 0;
+   }
 }
