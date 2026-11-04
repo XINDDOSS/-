@@ -1,7 +1,8 @@
-/*
- * 程序名：demo7.cpp，此程序用于演示封装socket通讯的客户端
+/* 
+ * 程序名：client.cpp，此程序用于演示文件传输的客户端。
 */
 #include <iostream>
+#include <fstream>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -56,12 +57,18 @@ class ctcpclient //TCP通讯
     buffer.clear();
    buffer.resize(maxlen);
    int readn=::recv(m_clientfd,&buffer[0],buffer.size(),0);
-   if(readn==-1){
+   if(readn<=-1){
     buffer.clear();
     return false;
    }
    buffer.resize(readn);
    return true;
+  }
+  //向服务端发送二进制数据报文
+  bool send(void*buffer,const size_t size){
+    if(m_clientfd==-1)return false;
+    if((::send(m_clientfd,buffer,size,0))<=0)return false;
+    return true;
   }
 //断开连接
 bool close(){
@@ -70,34 +77,75 @@ bool close(){
   m_clientfd=-1;
   return true;
 }
-
+bool sendfile(const string &filename,const size_t filesize){
+  ifstream fin(filename,ios::binary);
+  if(fin.is_open()==false){
+    cout<<"打开文件"<<filename<<"失败"<<endl;
+    return false;
+  }
+  int onread=0;
+  int totalbytes=0;
+  char buffer[4096];
+  while(true){
+    memset(buffer,0,sizeof(buffer));
+    if(filesize-totalbytes>4096)onread=4096;
+    else onread=filesize-totalbytes;
+    fin.read(buffer,onread);
+    if(send(buffer,onread)==false)return false;
+    totalbytes+=onread;
+    if(totalbytes==filesize)break;
+  }
+  return true;
+}
  ~ctcpclient(){close();}
 };
-int main(int argc,char*argv[]){
-  if(argc!=3){
-    cout<<"Using:./client 服务端的IP 服务端的端口\nExample:./client 127.0.0.1 5005\n\n";
+int main(int argc,char *argv[])
+{
+  if (argc!=5)
+  {
+    cout << "Using:./client 服务端的IP 服务端的端口 文件名 文件大小\n";
+    cout << "Example:./client 192.168.101.138 5005 aaa.txt 2424\n\n";
     return -1;
   }
   ctcpclient tcpclient;
-  if(tcpclient.connect(argv[1],atoi(argv[2]))==false)//发起连接请求
+  if (tcpclient.connect(argv[1],atoi(argv[2]))==false)  // 向服务端发起连接请求。
   {
-    perror("connect()");
+    perror("connect()"); return -1;
+  }
+  //发送文件流程
+  struct st_fileinfo{
+    char filename[256];
+    int filesize;
+  }fileinfo;
+  memset(&fileinfo,0,sizeof(fileinfo));
+  strcpy(fileinfo.filename,argv[3]);
+  fileinfo.filesize=atoi(argv[4]);
+  if(tcpclient.send(&fileinfo,sizeof(fileinfo))==false){
+    perror("send");
     return -1;
   }
-   string buffer;
-   for(int ii=0;ii<10;ii++){
-    buffer="这是第"+to_string(ii+1)+"个超级女生，编号"+to_string(ii+1)+"。";
-    if(tcpclient.send(buffer)==false){
-      perror("send");
-      break;
-    }
-    cout<<"发送"<<buffer<<endl;
-    //接受
-    if(tcpclient.recv(buffer,1024)==false){
-      perror("recv");
-      break;
-    }
-    cout<<"接收"<<buffer<<endl;
-    sleep(1);
-   }
+  cout<<"发送文件信息的结构体"<<fileinfo.filename<<" 大小:"<<fileinfo.filesize<<endl;
+  string buffer;
+  if(tcpclient.recv(buffer,2)==false){
+    perror("recv()");
+    return -1;
+  }
+  if(buffer!="ok"){
+    cout<<"服务器没有回复ok"<<endl;
+    return -1;
+  }
+  cout<<"发送开始"<<endl;
+  if(tcpclient.sendfile(fileinfo.filename,fileinfo.filesize)==false){
+    perror("sendfile()");
+    return -1;
+  }
+   if(tcpclient.recv(buffer,2)==false){
+    perror("recv()");
+    return -1;
+  }
+  if(buffer!="ok"){
+    cout<<"发送文件失败"<<endl;
+    return -1;
+  }
+  cout<<"发送文件成功"<<endl;
 }

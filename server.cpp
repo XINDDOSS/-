@@ -1,16 +1,18 @@
 /*
- * 程序名：server.cpp，此程序用于演示封装socket通讯的服务端
+ * 程序名：clinet.cpp，此程序用于演示文件传输的服务端。
 */
 #include <iostream>
+#include <fstream>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <unistd.h>
 #include <netdb.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include <signal.h>
+#include<string>
 using namespace std;
 class ctcpserver{
     private:
@@ -76,6 +78,32 @@ unsigned short m_port;
          buffer.resize(readn);
          return true;
     }
+    //接收二进制客户端报文
+    bool recv(void*buffer,const size_t size){
+      if(::recv(m_clientfd,buffer,size,0)<=0)return false;
+      return true;
+    }
+    //接收报文内容
+    bool recvfile(const string &filename,const size_t filesize){
+      ofstream fout;
+      fout.open(filename,ios::binary);
+      if(fout.is_open()==false){
+        cout<<"打开文件"<<filename<<"失败"<<endl;
+        return false;
+      }
+      int totalbytes=0;
+      int onread=0;
+      char buffer[4096];
+      while(true){
+        if(filesize-totalbytes>4096)onread=4096;
+        else onread=filesize-totalbytes;
+        if(recv(buffer,onread)==false)return false;
+        fout.write(buffer,onread);
+        totalbytes+=onread;
+        if(filesize==totalbytes)break;
+      }
+      return true;
+    }
     //关闭客户端。
     bool closelisten(){
         if(m_listenfd==-1)return false;
@@ -96,76 +124,77 @@ unsigned short m_port;
     }
 };
 ctcpserver tcpserver;
-//父进程信号处理。
 void fathexit(int sig){
-  //防止信号中断
   signal(SIGINT,SIG_IGN);
   signal(SIGTERM,SIG_IGN);
-  cout<<"父进程退出,sig"<<sig<<endl;
-  kill(0,SIGTERM);//向子程序发送15，通知退出
-  tcpserver.closelisten();//父进程关闭监听
+  cout<<"父进程退出，sig="<<sig<<endl;
+  kill(0,SIGTERM);
+  tcpserver.closelisten();
 exit(0);
 }
-//子进程信号处理
-void chidexit(int sig){
+void chldexit(int sig){
   signal(SIGINT,SIG_IGN);
   signal(SIGTERM,SIG_IGN);
-  cout<<"子进程"<<getpid()<<"退出，sig="<<sig<<endl;
-  tcpserver.closeclient();//子进程关闭监听
+  cout<<"子进程"<<getpid()<<"退出,sig="<<sig<<endl;
+  tcpserver.closeclient();
 exit(0);
 }
+int num=0;
 int main(int argc,char*argv[]){
-   if(argc!=2){
-    cout << "Using:./server 通讯端口\nExample:./server 5005\n\n";
+  if(argc!=3){
+     cout << "Using:./server 通讯端口 文件存放的目录\n";
+    cout << "Example:./server 5005 /tmp\n\n";
     cout << "注意：运行服务端程序的Linux系统的防火墙必须要开通5005端口。\n";
     cout << "      如果是云服务器，还要开通云平台的访问策略。\n\n";
     return -1;
-   }
-   //忽略全部信号，可以解决僵尸进程
-   for(int ii=1;ii<=54;ii++){
+  }
+  for(int ii=1;ii<=64;ii++){
     signal(ii,SIG_IGN);
-   }
-   signal(SIGTERM,fathexit);
-   signal(SIGINT,fathexit);
-   if(tcpserver.initserver(atoi(argv[1]))==false){
+  }
+ signal(SIGINT,fathexit);
+ signal(SIGTERM,fathexit);
+  if(tcpserver.initserver(atoi(argv[1]))==false){
     perror("initserver()");
     return -1;
-   }
-   while(true){
-    //受理客户端连接
+  }
+  while(true){
+    num++;
     if(tcpserver.accept()==false){
       perror("accept()");
       return -1;
     }
     int pid=fork();
     if(pid==-1){
-      perror("fork");
+      perror("fork()");
       return -1;
     }
-    if(pid>0)//父进程
-    {
+    if(pid>0){
       tcpserver.closeclient();
       continue;
     }
-    tcpserver.closelisten();
-    //重新设计信号
-    signal(SIGTERM,chidexit);
-    signal(SIGINT,SIG_IGN);//子进程不需要
-    cout<<"客户端已连接:"<<tcpserver.clientip()<<endl;
-    string buffer;
-    while(true){
-      if(tcpserver.recv(buffer,1024)==false){
-        perror("recv()");
-        break;
-      }
-      cout<<"接收"<<buffer<<endl;
-      buffer="ok";
-        if(tcpserver.send(buffer)==false){
-          perror("send");
-          break;
-        }
-        cout<<"发送"<<buffer<<endl;
+   signal(SIGTERM,chldexit);
+    signal(SIGINT,SIG_IGN);
+    cout<<"客户端已经连接"<<tcpserver.clientip()<<endl;
+    struct st_fileinfo{
+      char filename[256];
+      int filesize;
+    }fileinfo;
+    memset(&fileinfo,0,sizeof(fileinfo));
+    if(tcpserver.recv(&fileinfo,sizeof(fileinfo))==false){
+      perror("recv");
+      return -1;
     }
+    cout<<"文件信息结构体"<<fileinfo.filename<<fileinfo.filesize<<endl;
+    if(tcpserver.send("ok")==false){
+      perror("send()");
+      return -1;
+    }
+    if(tcpserver.recvfile(string(argv[2])+"/"+"client"+to_string(num),fileinfo.filesize)==false){
+      cout<<"接受文件失败"<<endl;
+      return -1;
+    }
+    cout<<"接收文件成功"<<endl;
+    tcpserver.send("ok");
     return 0;
-   }
+  }
 }
